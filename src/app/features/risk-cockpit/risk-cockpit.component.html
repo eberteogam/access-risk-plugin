@@ -1,0 +1,210 @@
+<section class="cockpit">
+  <header class="cockpit__header">
+    <div>
+      <h2 class="spds-h4">Access risk</h2>
+      <p class="cockpit__lede">Every account on a source, scored from the data its connector brings in. Preview a cleanup and see what it buys you before anything changes.</p>
+    </div>
+    <div class="cockpit__controls">
+      <p-select
+        [options]="sources()"
+        optionLabel="name"
+        optionValue="id"
+        [ngModel]="sourceId()"
+        (ngModelChange)="selectSource($event)"
+        [disabled]="mode() === 'sample' || loading()"
+        placeholder="Choose a source"
+        ariaLabel="Source"
+      />
+      <p-tag
+        [value]="mode() === 'live' ? 'Live tenant data' : 'Sample data'"
+        [severity]="mode() === 'live' ? 'success' : 'warn'"
+      />
+      <p-button label="Refresh" severity="secondary" [loading]="loading()" [disabled]="mode() === 'sample'" (onClick)="refresh()" />
+    </div>
+  </header>
+
+  @if (mode() === 'sample') {
+    <p class="notice">Showing sample data because the plugin is running outside Identity Security Cloud. Open it through the developer URL to score your real source.</p>
+  }
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  }
+
+  @if (insights(); as ins) {
+    @if (ins.correlationGap) {
+      <p class="notice">
+        {{ ins.totals.uncorrelated }} of {{ ins.totals.accounts }} accounts have no owner because this source isn't correlated to identities yet.
+        Set up account correlation (for example, email to email) to turn on owner checks.
+      </p>
+    }
+
+    <dl class="stats">
+      <div class="stats__item"><dt>Accounts scored</dt><dd>{{ ins.totals.accounts }}</dd></div>
+      <div class="stats__item stats__item--alert"><dt>Need review</dt><dd>{{ ins.totals.atRisk }}</dd></div>
+      <div class="stats__item"><dt>Disabled but entitled</dt><dd>{{ ins.totals.dormant }}</dd></div>
+      <div class="stats__item"><dt>Deprecated grants</dt><dd>{{ ins.totals.deprecatedGrants }}</dd></div>
+      <div class="stats__item"><dt>Unusual for peers</dt><dd>{{ ins.totals.outliers }}</dd></div>
+    </dl>
+
+    @if (impact(); as imp) {
+      <div class="impact" role="status">
+        <div class="impact__numbers">
+          <p class="impact__headline">Risk points drop from {{ imp.pointsBefore }} to {{ imp.pointsAfter }}, {{ imp.percent }}% lower.</p>
+          <p class="impact__detail">
+            Previewing {{ imp.revocations }} revocation{{ imp.revocations === 1 ? '' : 's' }}. Accounts that need review go from {{ imp.reviewBefore }} to {{ imp.reviewAfter }}. Nothing has changed in the tenant yet.
+          </p>
+          @if (handoffMessage()) {
+            <p class="impact__handoff" [class.impact__handoff--failed]="handoffState() === 'failed'">{{ handoffMessage() }}</p>
+          }
+        </div>
+        <div class="impact__actions">
+          @if (handoffEnabled) {
+            <p-button
+              label="Send plan to ServiceNow"
+              [loading]="handoffState() === 'sending'"
+              [disabled]="mode() === 'sample' || handoffState() === 'sending'"
+              (onClick)="sendPlan()"
+            />
+          }
+          <p-button label="Reset preview" severity="secondary" (onClick)="resetPreview()" />
+        </div>
+      </div>
+    } @else {
+      <div class="summary">
+        <p class="summary__text">{{ summary() }}</p>
+        <p class="summary__source">{{ narratorLabel }}. Plugins can't call outside AI services yet, so this summary is computed here; the provider can be swapped for a model later.</p>
+      </div>
+    }
+
+    <ul class="legend" aria-label="What the bar colors mean">
+      @for (key of factorKeys; track key) {
+        <li><span class="legend__swatch" [style.background]="factorMeta[key].color"></span>{{ factorMeta[key].label }}</li>
+      }
+    </ul>
+
+    <div class="layout">
+      <div class="layout__list">
+        <div class="toolbar">
+          <div class="filters" role="group" aria-label="Filter by risk">
+            @for (f of bandFilters; track f.value) {
+              <button type="button" class="filters__btn" [class.filters__btn--on]="bandFilter() === f.value" (click)="setBand(f.value)">
+                {{ f.label }}
+              </button>
+            }
+          </div>
+          <p-button label="Preview all recommended fixes" severity="secondary" (onClick)="previewAllFixes()" />
+        </div>
+
+        <p-table [value]="visible()" [paginator]="true" [rows]="12" dataKey="account.id" [rowHover]="true">
+          <ng-template #header>
+            <tr>
+              <th pSortableColumn="displayName">Account <p-sortIcon field="displayName" /></th>
+              <th pSortableColumn="department">Department <p-sortIcon field="department" /></th>
+              <th pSortableColumn="score">Risk <p-sortIcon field="score" /></th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-row>
+            <tr
+              class="row"
+              [class.row--selected]="selectedId() === row.account.id"
+              tabindex="0"
+              (click)="select(row)"
+              (keydown.enter)="select(row)"
+            >
+              <td>
+                <span class="row__name">{{ row.displayName }}</span>
+                <span class="row__native">{{ row.account.nativeIdentity }}</span>
+              </td>
+              <td>{{ row.department }}</td>
+              <td>
+                <div class="row__risk">
+                  <span class="score">{{ row.score }}</span>
+                  <span class="bar" [attr.aria-label]="'Score ' + row.score">
+                    @for (f of row.factors; track f.key) {
+                      <span class="bar__seg" [style.width.%]="f.points" [style.background]="colorOf(f.key)" [title]="f.title"></span>
+                    }
+                  </span>
+                  @if (previousScore(row); as was) {
+                    <span class="row__was">was {{ was }}</span>
+                  }
+                </div>
+              </td>
+            </tr>
+          </ng-template>
+          <ng-template #emptymessage>
+            <tr><td colspan="3" class="empty">No accounts in this risk band. Try another filter.</td></tr>
+          </ng-template>
+        </p-table>
+      </div>
+
+      <aside class="layout__detail" aria-live="polite">
+        @if (selected(); as s) {
+          <div class="detail">
+            <div class="detail__head">
+              <div>
+                <h3 class="spds-h5">{{ s.displayName }}</h3>
+                <p class="detail__meta">{{ s.jobTitle || 'No title' }}, {{ s.department }}</p>
+              </div>
+              <p-tag [value]="bandLabel(s.band, s.score)" [severity]="severity(s.band)" />
+            </div>
+
+            <span class="bar bar--large" [attr.aria-label]="'Score ' + s.score">
+              @for (f of s.factors; track f.key) {
+                <span class="bar__seg" [style.width.%]="f.points" [style.background]="colorOf(f.key)"></span>
+              }
+            </span>
+
+            @if (s.factors.length === 0) {
+              <p class="detail__empty">Nothing on this account needs attention.</p>
+            }
+
+            <ol class="factors">
+              @for (f of s.factors; track f.key) {
+                <li class="factor" [style.border-color]="colorOf(f.key)">
+                  <p class="factor__title">{{ f.title }} <span class="factor__points">+{{ f.points }}</span></p>
+                  <p class="factor__detail">{{ f.detail }}</p>
+                  <p class="factor__action">{{ f.action }}</p>
+                  @if (f.fixes?.length) {
+                    <p-button
+                      [label]="fixPreviewed(s.account.id, f) ? 'Undo preview' : 'Preview this fix'"
+                      size="small"
+                      severity="secondary"
+                      (onClick)="previewFix(s.account.id, f)"
+                    />
+                  }
+                </li>
+              }
+            </ol>
+
+            @if (selectedBaseline(); as b) {
+              <h4 class="detail__subhead">Access on this source</h4>
+              <ul class="access">
+                @for (e of b.entitlements; track e.value) {
+                  <li [class.access__revoked]="isRevoked(s.account.id, e.value)">
+                    <span class="access__name">{{ e.displayName }}</span>
+                    @if (e.status === 'deprecated') { <p-tag value="Deprecated" severity="warn" /> }
+                    @if (isPrivileged(e)) { <p-tag value="Privileged" severity="danger" /> }
+                    <p-button
+                      class="access__toggle"
+                      [label]="isRevoked(s.account.id, e.value) ? 'Undo' : 'Preview revoke'"
+                      size="small"
+                      [text]="true"
+                      (onClick)="toggleRevoke(s.account.id, e.value)"
+                    />
+                  </li>
+                } @empty {
+                  <li class="access__none">No entitlements.</li>
+                }
+              </ul>
+            }
+          </div>
+        } @else {
+          <p class="detail__empty">Select an account to see why it scored the way it did.</p>
+        }
+      </aside>
+    </div>
+  } @else if (loading()) {
+    <p class="loading">Loading accounts and entitlements…</p>
+  }
+</section>
